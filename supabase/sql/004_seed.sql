@@ -1,0 +1,13 @@
+-- Optional seed data.
+-- 1) First create auth users in Supabase Authentication (Dashboard).
+-- 2) Then map those user IDs below.
+
+-- Example:
+-- insert into public.users (id, name, email, role)
+-- values
+--   ('00000000-0000-0000-0000-000000000001', 'Admin User', 'admin@mini-crm.com', 'admin'),
+--   ('00000000-0000-0000-0000-000000000002', 'Agente Uno', 'agente1@mini-crm.com', 'agent')
+-- on conflict (id) do update set
+--   name = excluded.name,
+--   email = excluded.email,
+--   role = excluded.role;

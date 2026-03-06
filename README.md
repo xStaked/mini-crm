@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mini CRM (Supabase)
 
-## Getting Started
+CRM web para equipo comercial pequeno, enfocado en evitar duplicidad de prospectos por RFC.
 
-First, run the development server:
+## Stack
+
+- Next.js (App Router) + TypeScript + Tailwind CSS
+- Supabase (Auth + Postgres + RLS)
+
+## Funcionalidades
+
+- Login por roles (`admin`, `agent`)
+- Bloqueo de RFC duplicado en alta
+- RFC lock temporal (45m) para evitar choques de prospeccion
+- Estados + prioridad + proxima accion
+- Historial de actividad por empresa
+- Notificaciones internas por eventos
+- Recordatorios de proximas acciones (ejecucion manual/API)
+- Multi-sucursal (`office_id`) con visibilidad por oficina
+- Gestion de usuarios (admin): alta, activar/desactivar, eliminar
+
+## Setup local
+
+1. Instala dependencias:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2. Crea `.env.local` desde `.env.example`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cp .env.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+3. Configura en `.env.local`:
 
-## Learn More
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (requerido para crear/eliminar usuarios desde admin)
 
-To learn more about Next.js, take a look at the following resources:
+4. Ejecuta scripts SQL en Supabase (en orden):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `supabase/sql/001_schema.sql`
+- `supabase/sql/002_indexes.sql`
+- `supabase/sql/003_rls_policies.sql`
+- `supabase/sql/005_crm_enhancements.sql`
+- `supabase/sql/006_offices_locks_notifications_users.sql`
+- `supabase/sql/004_seed.sql` (opcional)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+5. Crea usuarios iniciales en Supabase Auth:
 
-## Deploy on Vercel
+- 1 admin
+- agentes necesarios
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+6. Levanta la app:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+pnpm dev
+```
+
+## Endpoints nuevos
+
+- `POST|DELETE /api/rfc-locks` bloquear/liberar RFC temporal
+- `GET /api/notifications` ver notificaciones propias
+- `PATCH /api/notifications/read-all` marcar todas leidas
+- `POST /api/reminders/run` generar recordatorios de proximas acciones (admin)
+- `GET|POST /api/admin/users` listar/crear usuarios (admin)
+- `PATCH|DELETE /api/admin/users/:id` activar/desactivar/eliminar (admin)
+
+## Nota sobre recordatorios automaticos
+
+Puedes programar `POST /api/reminders/run` con un cron (Vercel Cron, GitHub Actions, etc.) para ejecucion diaria automatica.
