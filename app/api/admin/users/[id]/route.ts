@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { query, queryOne } from "@/lib/db";
 
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -47,21 +47,26 @@ export async function PATCH(
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
 
-  const { data: target } = await supabase
-    .from("users")
-    .select("id,office_id")
-    .eq("id", id)
-    .maybeSingle();
+  const target = await queryOne<{ id: string; office_id: string }>(
+    `
+      select id, office_id
+      from users
+      where id = $1
+      limit 1
+    `,
+    [id]
+  );
 
   if (!target || target.office_id !== profile.office_id) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  const { error } = await supabase.from("users").update(updates).eq("id", id);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const fields = Object.entries(updates);
+  const assignments = fields.map(([key], index) => `${key} = $${index + 1}`);
+  await query(
+    `update users set ${assignments.join(", ")} where id = $${fields.length + 1}`,
+    [...fields.map(([, value]) => value), id]
+  );
 
   return NextResponse.json({ ok: true });
 }
@@ -71,7 +76,7 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -85,35 +90,29 @@ export async function DELETE(
     return NextResponse.json({ error: "User inactive" }, { status: 403 });
   }
 
-  const { data: target } = await supabase
-    .from("users")
-    .select("id,office_id")
-    .eq("id", id)
-    .maybeSingle();
+  const target = await queryOne<{ id: string; office_id: string }>(
+    `
+      select id, office_id
+      from users
+      where id = $1
+      limit 1
+    `,
+    [id]
+  );
 
   if (!target || target.office_id !== profile.office_id) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  let adminClient;
   try {
-    adminClient = createAdminClient();
+    await query("delete from users where id = $1", [id]);
   } catch (error) {
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Service role not configured",
+        error: error instanceof Error ? error.message : "Could not delete user",
       },
       { status: 500 }
     );
-  }
-
-  const { error: deleteError } = await adminClient.auth.admin.deleteUser(id, true);
-
-  if (deleteError) {
-    return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { query, queryOne } from "@/lib/db";
 import { notifyUsers } from "@/lib/notifications";
 
 export async function POST() {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -20,32 +21,41 @@ export async function POST() {
   const now = new Date();
   const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-  const { data: dueCompanies, error } = await supabase
-    .from("companies")
-    .select("id,name,assigned_to,next_action_at")
-    .eq("office_id", profile.office_id)
-    .not("next_action_at", "is", null)
-    .lte("next_action_at", in24h.toISOString())
-    .neq("status", "client")
-    .limit(200);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const dueCompanies = await query<{
+    id: string;
+    name: string;
+    assigned_to: string;
+    next_action_at: string | null;
+  }>(
+    `
+      select id, name, assigned_to, next_action_at
+      from companies
+      where office_id = $1
+        and next_action_at is not null
+        and next_action_at <= $2
+        and status <> 'client'
+      limit 200
+    `,
+    [profile.office_id, in24h.toISOString()]
+  );
 
   const today = now.toISOString().slice(0, 10);
 
   const notifications = await Promise.all(
-    (dueCompanies ?? []).map(async (company) => {
-      const { data: exists } = await supabase
-        .from("notifications")
-        .select("id")
-        .eq("user_id", company.assigned_to)
-        .eq("type", "reminder_next_action")
-        .contains("meta", { company_id: company.id, date: today })
-        .limit(1);
+    dueCompanies.map(async (company) => {
+      const exists = await queryOne<{ id: string }>(
+        `
+          select id
+          from notifications
+          where user_id = $1
+            and type = 'reminder_next_action'
+            and meta @> $2::jsonb
+          limit 1
+        `,
+        [company.assigned_to, JSON.stringify({ company_id: company.id, date: today })]
+      );
 
-      if ((exists ?? []).length > 0) {
+      if (exists) {
         return null;
       }
 
@@ -64,7 +74,7 @@ export async function POST() {
   );
 
   await notifyUsers(
-    supabase,
+    undefined,
     notifications.filter((item): item is NonNullable<typeof item> => Boolean(item))
   );
 

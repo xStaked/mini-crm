@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
-import { COMPANY_PRIORITIES, type CompanyPriority } from "@/lib/types";
+import { query, queryOne } from "@/lib/db";
+import {
+  COMPANY_CONTACT_SOURCES,
+  COMPANY_CONTRACT_STATUSES,
+  COMPANY_PRODUCTS,
+  type CompanyContactSource,
+  type CompanyContractStatus,
+  type CompanyProduct,
+} from "@/lib/types";
 
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,20 +26,44 @@ export async function PATCH(
   }
 
   const body = (await request.json().catch(() => null)) as
-    | { priority?: string; nextActionAt?: string | null }
+    | {
+        product?: string;
+        contractStatus?: string;
+        contactSource?: string;
+        nextActionAt?: string | null;
+      }
     | null;
 
   if (!body) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const payload: { priority?: CompanyPriority; next_action_at?: string | null } = {};
+  const payload: {
+    product?: CompanyProduct;
+    contract_status?: CompanyContractStatus;
+    contact_source?: CompanyContactSource;
+    next_action_at?: string | null;
+  } = {};
 
-  if (body?.priority) {
-    if (!COMPANY_PRIORITIES.includes(body.priority as CompanyPriority)) {
-      return NextResponse.json({ error: "Invalid priority" }, { status: 400 });
+  if (body?.product) {
+    if (!COMPANY_PRODUCTS.includes(body.product as CompanyProduct)) {
+      return NextResponse.json({ error: "Invalid product" }, { status: 400 });
     }
-    payload.priority = body.priority as CompanyPriority;
+    payload.product = body.product as CompanyProduct;
+  }
+
+  if (body?.contractStatus) {
+    if (!COMPANY_CONTRACT_STATUSES.includes(body.contractStatus as CompanyContractStatus)) {
+      return NextResponse.json({ error: "Invalid contract status" }, { status: 400 });
+    }
+    payload.contract_status = body.contractStatus as CompanyContractStatus;
+  }
+
+  if (body?.contactSource) {
+    if (!COMPANY_CONTACT_SOURCES.includes(body.contactSource as CompanyContactSource)) {
+      return NextResponse.json({ error: "Invalid contact source" }, { status: 400 });
+    }
+    payload.contact_source = body.contactSource as CompanyContactSource;
   }
 
   if (body && "nextActionAt" in body) {
@@ -42,23 +74,32 @@ export async function PATCH(
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
 
-  const baseQuery = supabase
-    .from("companies")
-    .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("office_id", profile.office_id);
+  const company = await queryOne<{ id: string; assigned_to: string }>(
+    `
+      select id, assigned_to
+      from companies
+      where id = $1
+        and office_id = $2
+      limit 1
+    `,
+    [id, profile.office_id]
+  );
 
-  const { data, error } =
-    profile.role === "agent"
-      ? await baseQuery.eq("assigned_to", user.id).select("id").single()
-      : await baseQuery.select("id").single();
-
-  if (error || !data) {
+  if (!company || (profile.role === "agent" && company.assigned_to !== user.id)) {
     return NextResponse.json(
       { error: "Company not found or unauthorized" },
       { status: 403 }
     );
   }
+
+  const fields = Object.entries(payload);
+  const assignments = fields.map(([key], index) => `${key} = $${index + 1}`);
+  assignments.push(`updated_at = now()`);
+
+  await query(
+    `update companies set ${assignments.join(", ")} where id = $${fields.length + 1}`,
+    [...fields.map(([, value]) => value), id]
+  );
 
   return NextResponse.json({ ok: true });
 }

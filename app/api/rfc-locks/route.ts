@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { query, queryOne } from "@/lib/db";
 import { normalizeRfc } from "@/lib/rfc";
 import { notifyUsers } from "@/lib/notifications";
 
 const LOCK_MINUTES = 45;
 
 export async function POST(request: NextRequest) {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -28,11 +29,15 @@ export async function POST(request: NextRequest) {
 
   const rfcNormalized = normalizeRfc(rfc);
 
-  const { data: existingCompany } = await supabase
-    .from("companies")
-    .select("id")
-    .eq("rfc_normalized", rfcNormalized)
-    .maybeSingle();
+  const existingCompany = await queryOne<{ id: string }>(
+    `
+      select id
+      from companies
+      where rfc_normalized = $1
+      limit 1
+    `,
+    [rfcNormalized]
+  );
 
   if (existingCompany) {
     return NextResponse.json(
@@ -41,18 +46,28 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  await supabase.from("rfc_locks").delete().lte("expires_at", new Date().toISOString());
+  await query("delete from rfc_locks where expires_at <= now()");
 
-  const { data: existingLock } = await supabase
-    .from("rfc_locks")
-    .select("id,locked_by,expires_at,users(name)")
-    .eq("rfc_normalized", rfcNormalized)
-    .maybeSingle();
+  const existingLock = await queryOne<{
+    id: string;
+    locked_by: string;
+    expires_at: string;
+    locked_by_name: string | null;
+  }>(
+    `
+      select l.id, l.locked_by, l.expires_at, u.name as locked_by_name
+      from rfc_locks l
+      left join users u on u.id = l.locked_by
+      where l.rfc_normalized = $1
+      limit 1
+    `,
+    [rfcNormalized]
+  );
 
   const expiresAt = new Date(Date.now() + LOCK_MINUTES * 60 * 1000).toISOString();
 
   if (existingLock && existingLock.locked_by !== user.id) {
-    await notifyUsers(supabase, [
+    await notifyUsers(undefined, [
       {
         userId: user.id,
         type: "rfc_lock_conflict",
@@ -67,31 +82,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: "RFC temporarily locked by another agent",
-        lockedBy: (existingLock.users as { name: string }[] | null)?.[0]?.name ?? "Agent",
+        lockedBy: existingLock.locked_by_name ?? "Agent",
         expiresAt: existingLock.expires_at,
       },
       { status: 409 }
     );
   }
 
-  const { data, error } = await supabase
-    .from("rfc_locks")
-    .upsert(
-      {
-        office_id: profile.office_id,
-        rfc_normalized: rfcNormalized,
-        company_name: body?.companyName?.trim() || null,
-        locked_by: user.id,
-        expires_at: expiresAt,
-      },
-      { onConflict: "rfc_normalized" }
-    )
-    .select("id,expires_at")
-    .single();
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const [data] = await query<{ id: string; expires_at: string }>(
+    `
+      insert into rfc_locks (office_id, rfc_normalized, company_name, locked_by, expires_at)
+      values ($1, $2, $3, $4, $5)
+      on conflict (rfc_normalized)
+      do update set
+        office_id = excluded.office_id,
+        company_name = excluded.company_name,
+        locked_by = excluded.locked_by,
+        expires_at = excluded.expires_at
+      returning id, expires_at
+    `,
+    [profile.office_id, rfcNormalized, body?.companyName?.trim() || null, user.id, expiresAt]
+  );
 
   return NextResponse.json({
     id: data.id,
@@ -101,7 +112,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -115,15 +126,14 @@ export async function DELETE(request: NextRequest) {
   }
 
   const rfcNormalized = normalizeRfc(rfc);
-  const { error } = await supabase
-    .from("rfc_locks")
-    .delete()
-    .eq("rfc_normalized", rfcNormalized)
-    .eq("locked_by", user.id);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await query(
+    `
+      delete from rfc_locks
+      where rfc_normalized = $1
+        and locked_by = $2
+    `,
+    [rfcNormalized, user.id]
+  );
 
   return NextResponse.json({ ok: true });
 }

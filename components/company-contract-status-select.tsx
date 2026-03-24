@@ -1,41 +1,43 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { COMPANY_PRODUCTS, type CompanyProduct } from "@/lib/types";
+import { COMPANY_CONTRACT_STATUSES, type CompanyContractStatus } from "@/lib/types";
 
-const productLabels: Record<CompanyProduct, string> = {
-  divisas: "Divisas",
-  bursatil: "Bursátil",
-  ambos: "Ambos",
+const contractLabels: Record<CompanyContractStatus, string> = {
+  activo: "Activo",
+  inactivo: "Inactivo",
 };
 
 type Props = {
   companyId: string;
-  initialProduct: CompanyProduct;
+  initialContractStatus: CompanyContractStatus;
 };
 
-export function CompanyProductSelect({ companyId, initialProduct }: Props) {
-  const [product, setProduct] = useState(initialProduct);
+export function CompanyContractStatusSelect({
+  companyId,
+  initialContractStatus,
+}: Props) {
+  const [contractStatus, setContractStatus] = useState(initialContractStatus);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const onChange = (nextProduct: CompanyProduct) => {
-    setProduct(nextProduct);
+  const onChange = (next: CompanyContractStatus) => {
+    setContractStatus(next);
     setError(null);
 
     startTransition(async () => {
       const response = await fetch(`/api/companies/${companyId}/details`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product: nextProduct }),
+        body: JSON.stringify({ contractStatus: next }),
       });
 
       if (!response.ok) {
-        setProduct(initialProduct);
+        setContractStatus(initialContractStatus);
         const payload = (await response.json().catch(() => null)) as
           | { error?: string }
           | null;
-        setError(payload?.error ?? "No se pudo actualizar el producto");
+        setError(payload?.error ?? "No se pudo actualizar la situación");
       }
     });
   };
@@ -43,14 +45,14 @@ export function CompanyProductSelect({ companyId, initialProduct }: Props) {
   return (
     <div className="space-y-1">
       <select
-        value={product}
+        value={contractStatus}
         disabled={isPending}
-        onChange={(event) => onChange(event.target.value as CompanyProduct)}
+        onChange={(event) => onChange(event.target.value as CompanyContractStatus)}
         className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
       >
-        {COMPANY_PRODUCTS.map((item) => (
+        {COMPANY_CONTRACT_STATUSES.map((item) => (
           <option key={item} value={item}>
-            {productLabels[item]}
+            {contractLabels[item]}
           </option>
         ))}
       </select>

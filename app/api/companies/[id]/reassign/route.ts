@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { queryOne, withTransaction } from "@/lib/db";
 import { notifyUsers } from "@/lib/notifications";
 
 export async function PATCH(
@@ -7,7 +8,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -30,51 +31,56 @@ export async function PATCH(
     return NextResponse.json({ error: "assignedTo is required" }, { status: 400 });
   }
 
-  const { data: agent } = await supabase
-    .from("users")
-    .select("id,office_id,is_active")
-    .eq("id", assignedTo)
-    .eq("role", "agent")
-    .maybeSingle();
+  const agent = await queryOne<{ id: string; office_id: string; is_active: boolean }>(
+    `
+      select id, office_id, is_active
+      from users
+      where id = $1
+        and role = 'agent'
+      limit 1
+    `,
+    [assignedTo]
+  );
 
   if (!agent || agent.office_id !== profile.office_id || !agent.is_active) {
     return NextResponse.json({ error: "Target agent not found or inactive" }, { status: 404 });
   }
 
-  const { data: company } = await supabase
-    .from("companies")
-    .select("id,name,assigned_to")
-    .eq("id", id)
-    .eq("office_id", profile.office_id)
-    .maybeSingle();
+  const company = await queryOne<{ id: string; name: string; assigned_to: string }>(
+    `
+      select id, name, assigned_to
+      from companies
+      where id = $1
+        and office_id = $2
+      limit 1
+    `,
+    [id, profile.office_id]
+  );
 
   if (!company) {
     return NextResponse.json({ error: "Company not found" }, { status: 404 });
   }
 
-  const { data, error } = await supabase
-    .from("companies")
-    .update({ assigned_to: assignedTo, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("office_id", profile.office_id)
-    .select("id")
-    .single();
-
-  if (error || !data) {
-    return NextResponse.json(
-      { error: "Company not found or cannot be reassigned" },
-      { status: 400 }
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        update companies
+        set assigned_to = $1, updated_at = now()
+        where id = $2
+      `,
+      [assignedTo, id]
     );
-  }
 
-  await supabase.from("company_activities").insert({
-    company_id: id,
-    user_id: user.id,
-    type: "reassignment",
-    content: `Company reassigned to agent ${assignedTo}`,
+    await client.query(
+      `
+        insert into company_activities (company_id, user_id, type, content)
+        values ($1, $2, 'reassignment', $3)
+      `,
+      [id, user.id, `Company reassigned to agent ${assignedTo}`]
+    );
   });
 
-  await notifyUsers(supabase, [
+  await notifyUsers(undefined, [
     {
       userId: assignedTo,
       type: "company_reassigned",

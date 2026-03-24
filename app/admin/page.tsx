@@ -5,7 +5,13 @@ import { LogoutForm } from "@/components/logout-form";
 import { NotificationsMenu } from "@/components/notifications-menu";
 import { RunRemindersButton } from "@/components/run-reminders-button";
 import { getAuthContext } from "@/lib/auth";
-import type { CompanyPriority, CompanyStatus } from "@/lib/types";
+import { query } from "@/lib/db";
+import type {
+  CompanyContactSource,
+  CompanyContractStatus,
+  CompanyProduct,
+  CompanyStatus,
+} from "@/lib/types";
 
 type Agent = {
   id: string;
@@ -21,7 +27,9 @@ type CompanyWithAgent = {
   name: string;
   rfc: string;
   status: CompanyStatus;
-  priority: CompanyPriority;
+  product: CompanyProduct;
+  contract_status: CompanyContractStatus;
+  contact_source: CompanyContactSource;
   created_at: string;
   updated_at: string;
   next_action_at: string | null;
@@ -30,7 +38,7 @@ type CompanyWithAgent = {
 };
 
 export default async function AdminDashboardPage() {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     redirect("/login");
@@ -44,26 +52,49 @@ export default async function AdminDashboardPage() {
     redirect("/dashboard");
   }
 
-  const [{ data: companies }, { data: agents }, { data: users }] = await Promise.all([
-    supabase
-      .from("companies")
-      .select(
-        "id,name,rfc,status,priority,created_at,updated_at,next_action_at,assigned_to,users!companies_assigned_to_fkey(name)"
-      )
-      .eq("office_id", profile.office_id)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("users")
-      .select("id,name,email")
-      .eq("role", "agent")
-      .eq("office_id", profile.office_id)
-      .eq("is_active", true)
-      .order("name", { ascending: true }),
-    supabase
-      .from("users")
-      .select("id,name,email,role,is_active,created_at")
-      .eq("office_id", profile.office_id)
-      .order("created_at", { ascending: false }),
+  const [companies, agents, users] = await Promise.all([
+    query<CompanyWithAgent>(
+      `
+        select
+          c.id,
+          c.name,
+          c.rfc,
+          c.status,
+          c.product,
+          c.contract_status,
+          c.contact_source,
+          c.created_at,
+          c.updated_at,
+          c.next_action_at,
+          c.assigned_to,
+          jsonb_build_array(jsonb_build_object('name', u.name)) as users
+        from companies c
+        left join users u on u.id = c.assigned_to
+        where c.office_id = $1
+        order by c.created_at desc
+      `,
+      [profile.office_id]
+    ),
+    query<Agent>(
+      `
+        select id, name, email, role, is_active, created_at
+        from users
+        where role = 'agent'
+          and office_id = $1
+          and is_active = true
+        order by name asc
+      `,
+      [profile.office_id]
+    ),
+    query<Agent>(
+      `
+        select id, name, email, role, is_active, created_at
+        from users
+        where office_id = $1
+        order by created_at desc
+      `,
+      [profile.office_id]
+    ),
   ]);
 
   const mappedCompanies = ((companies as CompanyWithAgent[] | null) ?? []).map(
@@ -72,12 +103,14 @@ export default async function AdminDashboardPage() {
       name: company.name,
       rfc: company.rfc,
       status: company.status,
-      priority: company.priority,
+      product: company.product,
+      contract_status: company.contract_status,
+      contact_source: company.contact_source,
       created_at: company.created_at,
       updated_at: company.updated_at,
       next_action_at: company.next_action_at,
       assigned_to: company.assigned_to,
-      assigned_agent_name: company.users?.[0]?.name ?? "Unknown",
+      assigned_agent_name: company.users?.[0]?.name ?? "Sin asignar",
     })
   );
 
@@ -103,10 +136,10 @@ export default async function AdminDashboardPage() {
 
         <AdminDashboardClient
           companies={mappedCompanies}
-          agents={(agents as Agent[] | null) ?? []}
+          agents={agents}
         />
 
-        <AdminUserManagement initialUsers={(users as Agent[] | null) ?? []} />
+        <AdminUserManagement initialUsers={users} />
       </div>
     </main>
   );

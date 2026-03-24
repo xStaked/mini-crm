@@ -1,41 +1,45 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { COMPANY_PRODUCTS, type CompanyProduct } from "@/lib/types";
+import { COMPANY_CONTACT_SOURCES, type CompanyContactSource } from "@/lib/types";
 
-const productLabels: Record<CompanyProduct, string> = {
-  divisas: "Divisas",
-  bursatil: "Bursátil",
-  ambos: "Ambos",
+const sourceLabels: Record<CompanyContactSource, string> = {
+  referido: "Referido",
+  google: "Google",
+  base_propia: "Base propia",
+  otro: "Otro",
 };
 
 type Props = {
   companyId: string;
-  initialProduct: CompanyProduct;
+  initialContactSource: CompanyContactSource;
 };
 
-export function CompanyProductSelect({ companyId, initialProduct }: Props) {
-  const [product, setProduct] = useState(initialProduct);
+export function CompanyContactSourceSelect({
+  companyId,
+  initialContactSource,
+}: Props) {
+  const [contactSource, setContactSource] = useState(initialContactSource);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const onChange = (nextProduct: CompanyProduct) => {
-    setProduct(nextProduct);
+  const onChange = (next: CompanyContactSource) => {
+    setContactSource(next);
     setError(null);
 
     startTransition(async () => {
       const response = await fetch(`/api/companies/${companyId}/details`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product: nextProduct }),
+        body: JSON.stringify({ contactSource: next }),
       });
 
       if (!response.ok) {
-        setProduct(initialProduct);
+        setContactSource(initialContactSource);
         const payload = (await response.json().catch(() => null)) as
           | { error?: string }
           | null;
-        setError(payload?.error ?? "No se pudo actualizar el producto");
+        setError(payload?.error ?? "No se pudo actualizar el medio de contacto");
       }
     });
   };
@@ -43,14 +47,14 @@ export function CompanyProductSelect({ companyId, initialProduct }: Props) {
   return (
     <div className="space-y-1">
       <select
-        value={product}
+        value={contactSource}
         disabled={isPending}
-        onChange={(event) => onChange(event.target.value as CompanyProduct)}
+        onChange={(event) => onChange(event.target.value as CompanyContactSource)}
         className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
       >
-        {COMPANY_PRODUCTS.map((item) => (
+        {COMPANY_CONTACT_SOURCES.map((item) => (
           <option key={item} value={item}>
-            {productLabels[item]}
+            {sourceLabels[item]}
           </option>
         ))}
       </select>

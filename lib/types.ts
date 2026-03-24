@@ -2,10 +2,18 @@ export const COMPANY_STATUSES = [
   "prospect",
   "contacted",
   "negotiation",
-  "client",
 ] as const;
 
-export const COMPANY_PRIORITIES = ["low", "medium", "high"] as const;
+export const COMPANY_PRODUCTS = ["divisas", "bursatil", "ambos"] as const;
+
+export const COMPANY_CONTRACT_STATUSES = ["activo", "inactivo"] as const;
+
+export const COMPANY_CONTACT_SOURCES = [
+  "referido",
+  "google",
+  "base_propia",
+  "otro",
+] as const;
 
 export const ACTIVITY_TYPES = [
   "note",
@@ -17,7 +25,9 @@ export const ACTIVITY_TYPES = [
 ] as const;
 
 export type CompanyStatus = (typeof COMPANY_STATUSES)[number];
-export type CompanyPriority = (typeof COMPANY_PRIORITIES)[number];
+export type CompanyProduct = (typeof COMPANY_PRODUCTS)[number];
+export type CompanyContractStatus = (typeof COMPANY_CONTRACT_STATUSES)[number];
+export type CompanyContactSource = (typeof COMPANY_CONTACT_SOURCES)[number];
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 export type UserRole = "admin" | "agent";
 
@@ -41,7 +51,9 @@ export type Company = {
   email: string | null;
   notes: string | null;
   status: CompanyStatus;
-  priority: CompanyPriority;
+  product: CompanyProduct;
+  contract_status: CompanyContractStatus;
+  contact_source: CompanyContactSource;
   next_action_at: string | null;
   assigned_to: string;
   office_id: string;

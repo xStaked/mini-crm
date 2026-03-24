@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { queryOne, withTransaction } from "@/lib/db";
 import { COMPANY_STATUSES, type CompanyStatus } from "@/lib/types";
 
 export async function PATCH(
@@ -7,7 +8,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -26,29 +27,41 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
-  const baseQuery = supabase
-    .from("companies")
-    .update({ status, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .eq("office_id", profile.office_id);
+  const company = await queryOne<{ id: string; assigned_to: string }>(
+    `
+      select id, assigned_to
+      from companies
+      where id = $1
+        and office_id = $2
+      limit 1
+    `,
+    [id, profile.office_id]
+  );
 
-  const { data, error } =
-    profile.role === "agent"
-      ? await baseQuery.eq("assigned_to", user.id).select("id").single()
-      : await baseQuery.select("id").single();
-
-  if (error || !data) {
+  if (!company || (profile.role === "agent" && company.assigned_to !== user.id)) {
     return NextResponse.json(
       { error: "Company not found or unauthorized" },
       { status: 403 }
     );
   }
 
-  await supabase.from("company_activities").insert({
-    company_id: id,
-    user_id: user.id,
-    type: "status_change",
-    content: `Status updated to ${status}`,
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        update companies
+        set status = $1, updated_at = now()
+        where id = $2
+      `,
+      [status, id]
+    );
+
+    await client.query(
+      `
+        insert into company_activities (company_id, user_id, type, content)
+        values ($1, $2, 'status_change', $3)
+      `,
+      [id, user.id, `Status updated to ${status}`]
+    );
   });
 
   return NextResponse.json({ ok: true });

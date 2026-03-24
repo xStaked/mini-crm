@@ -3,6 +3,12 @@
 import { useState, useTransition } from "react";
 import { COMPANY_STATUSES, type CompanyStatus } from "@/lib/types";
 
+const statusLabels: Record<CompanyStatus, string> = {
+  prospect: "Prospecto (0-30 días)",
+  contacted: "Contacto (30-60 días)",
+  negotiation: "Negociación (60-90 días)",
+};
+
 type Props = {
   companyId: string;
   initialStatus: CompanyStatus;
@@ -29,7 +35,7 @@ export function CompanyStatusSelect({ companyId, initialStatus }: Props) {
         const payload = (await response.json().catch(() => null)) as
           | { error?: string }
           | null;
-        setError(payload?.error ?? "Could not update status");
+        setError(payload?.error ?? "No se pudo actualizar el estado");
       }
     });
   };
@@ -40,11 +46,11 @@ export function CompanyStatusSelect({ companyId, initialStatus }: Props) {
         value={status}
         disabled={isPending}
         onChange={(event) => onChange(event.target.value as CompanyStatus)}
-        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm capitalize"
+        className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
       >
         {COMPANY_STATUSES.map((item) => (
           <option key={item} value={item}>
-            {item}
+            {statusLabels[item]}
           </option>
         ))}
       </select>

@@ -1,35 +1,46 @@
-import { createClient as createServerClient } from "@/lib/supabase/server";
+import { queryOne } from "@/lib/db";
+import { getSession } from "@/lib/session";
 import type { UserProfile } from "@/lib/types";
 
 export async function getAuthContext() {
-  const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = await getSession();
 
-  if (!user) {
-    return { supabase, user: null, profile: null as UserProfile | null };
+  if (!session) {
+    return { user: null, profile: null as UserProfile | null };
   }
 
-  const { data: profile } = await supabase
-    .from("users")
-    .select("id,name,email,role,office_id,is_active,created_at,offices(name)")
-    .eq("id", user.id)
-    .single();
+  const profile = await queryOne<
+    UserProfile & {
+      office_name: string | null;
+    }
+  >(
+    `
+      select
+        u.id,
+        u.name,
+        u.email,
+        u.role,
+        u.office_id,
+        o.name as office_name,
+        u.is_active,
+        u.created_at
+      from users u
+      join offices o on o.id = u.office_id
+      where u.id = $1
+      limit 1
+    `,
+    [session.userId]
+  );
 
-  const mappedProfile = profile
-    ? {
-        ...(profile as Omit<UserProfile, "office_name"> & {
-          offices?: { name: string }[] | null;
-        }),
-        office_name: (profile as { offices?: { name: string }[] | null }).offices?.[0]
-          ?.name,
-      }
-    : null;
+  if (!profile) {
+    return { user: null, profile: null as UserProfile | null };
+  }
 
   return {
-    supabase,
-    user,
-    profile: (mappedProfile as UserProfile | null) ?? null,
+    user: {
+      id: profile.id,
+      email: profile.email,
+    },
+    profile,
   };
 }

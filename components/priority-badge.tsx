@@ -1,17 +1,23 @@
-import type { CompanyPriority } from "@/lib/types";
+import type { CompanyProduct } from "@/lib/types";
 
-const priorityClasses: Record<CompanyPriority, string> = {
-  low: "bg-emerald-100 text-emerald-700",
-  medium: "bg-amber-100 text-amber-700",
-  high: "bg-rose-100 text-rose-700",
+const productClasses: Record<CompanyProduct, string> = {
+  divisas: "bg-cyan-100 text-cyan-700",
+  bursatil: "bg-violet-100 text-violet-700",
+  ambos: "bg-indigo-100 text-indigo-700",
 };
 
-export function PriorityBadge({ priority }: { priority: CompanyPriority }) {
+const productLabels: Record<CompanyProduct, string> = {
+  divisas: "Divisas",
+  bursatil: "Bursátil",
+  ambos: "Ambos",
+};
+
+export function ProductBadge({ product }: { product: CompanyProduct }) {
   return (
     <span
-      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold capitalize ${priorityClasses[priority]}`}
+      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${productClasses[product]}`}
     >
-      {priority}
+      {productLabels[product]}
     </span>
   );
 }

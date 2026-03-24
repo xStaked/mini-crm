@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { query, queryOne } from "@/lib/db";
 import { ACTIVITY_TYPES, type ActivityType } from "@/lib/types";
 
 function canAccessCompany(companyAssignedTo: string, userId: string, role: string) {
@@ -11,7 +12,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,11 +22,15 @@ export async function GET(
     return NextResponse.json({ error: "User inactive" }, { status: 403 });
   }
 
-  const { data: company } = await supabase
-    .from("companies")
-    .select("assigned_to,office_id")
-    .eq("id", id)
-    .maybeSingle();
+  const company = await queryOne<{ assigned_to: string; office_id: string }>(
+    `
+      select assigned_to, office_id
+      from companies
+      where id = $1
+      limit 1
+    `,
+    [id]
+  );
 
   if (
     !company ||
@@ -35,20 +40,26 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data, error } = await supabase
-    .from("company_activities")
-    .select(
-      "id,company_id,user_id,type,content,created_at,users!company_activities_user_id_fkey(name)"
-    )
-    .eq("company_id", id)
-    .order("created_at", { ascending: false })
-    .limit(25);
+  const data = await query(
+    `
+      select
+        a.id,
+        a.company_id,
+        a.user_id,
+        a.type,
+        a.content,
+        a.created_at,
+        jsonb_build_array(jsonb_build_object('name', u.name)) as users
+      from company_activities a
+      left join users u on u.id = a.user_id
+      where a.company_id = $1
+      order by a.created_at desc
+      limit 25
+    `,
+    [id]
+  );
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ data: data ?? [] });
+  return NextResponse.json({ data });
 }
 
 export async function POST(
@@ -56,7 +67,7 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params;
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -81,11 +92,15 @@ export async function POST(
     return NextResponse.json({ error: "Content is required" }, { status: 400 });
   }
 
-  const { data: company } = await supabase
-    .from("companies")
-    .select("assigned_to,office_id")
-    .eq("id", id)
-    .maybeSingle();
+  const company = await queryOne<{ assigned_to: string; office_id: string }>(
+    `
+      select assigned_to, office_id
+      from companies
+      where id = $1
+      limit 1
+    `,
+    [id]
+  );
 
   if (
     !company ||
@@ -95,16 +110,13 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { error } = await supabase.from("company_activities").insert({
-    company_id: id,
-    user_id: user.id,
-    type,
-    content,
-  });
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await query(
+    `
+      insert into company_activities (company_id, user_id, type, content)
+      values ($1, $2, $3, $4)
+    `,
+    [id, user.id, type, content]
+  );
 
   return NextResponse.json({ ok: true }, { status: 201 });
 }

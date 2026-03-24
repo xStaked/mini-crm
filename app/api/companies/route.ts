@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
+import { query, queryOne, withTransaction } from "@/lib/db";
 import { notifyUsers } from "@/lib/notifications";
 import { isLikelyValidRfc, normalizeRfc } from "@/lib/rfc";
 import {
-  COMPANY_PRIORITIES,
+  COMPANY_CONTACT_SOURCES,
+  COMPANY_CONTRACT_STATUSES,
+  COMPANY_PRODUCTS,
   COMPANY_STATUSES,
-  type CompanyPriority,
+  type CompanyContactSource,
+  type CompanyContractStatus,
+  type CompanyProduct,
   type CompanyStatus,
 } from "@/lib/types";
 
@@ -13,15 +18,15 @@ type ExistingCompany = {
   id: string;
   created_at: string;
   status: CompanyStatus;
-  users: { name: string }[] | null;
+  assigned_agent_name: string | null;
 };
 
 function getAssignedAgentName(existing: ExistingCompany | null): string {
-  return existing?.users?.[0]?.name ?? "Unknown";
+  return existing?.assigned_agent_name ?? "Unknown";
 }
 
 export async function GET(request: NextRequest) {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,42 +41,57 @@ export async function GET(request: NextRequest) {
   const agentFilter = params.get("agentId");
   const search = params.get("search");
 
-  let query = supabase
-    .from("companies")
-    .select(
-      "id,name,rfc,status,priority,next_action_at,updated_at,created_at,assigned_to,users!companies_assigned_to_fkey(name)"
-    )
-    .order("created_at", { ascending: false });
+  const conditions = ["c.office_id = $1"];
+  const values: unknown[] = [profile.office_id];
 
   if (profile.role === "agent") {
-    query = query.eq("assigned_to", user.id);
+    values.push(user.id);
+    conditions.push(`c.assigned_to = $${values.length}`);
   }
 
-  query = query.eq("office_id", profile.office_id);
-
   if (profile.role === "admin" && agentFilter) {
-    query = query.eq("assigned_to", agentFilter);
+    values.push(agentFilter);
+    conditions.push(`c.assigned_to = $${values.length}`);
   }
 
   if (statusFilter && COMPANY_STATUSES.includes(statusFilter as CompanyStatus)) {
-    query = query.eq("status", statusFilter);
+    values.push(statusFilter);
+    conditions.push(`c.status = $${values.length}`);
   }
 
   if (search) {
-    query = query.or(`name.ilike.%${search}%,rfc.ilike.%${search}%`);
+    values.push(`%${search}%`);
+    conditions.push(`(c.name ilike $${values.length} or c.rfc ilike $${values.length})`);
   }
 
-  const { data, error } = await query;
+  const data = await query(
+    `
+      select
+        c.id,
+        c.name,
+        c.rfc,
+        c.status,
+        c.product,
+        c.contract_status,
+        c.contact_source,
+        c.next_action_at,
+        c.updated_at,
+        c.created_at,
+        c.assigned_to,
+        jsonb_build_array(jsonb_build_object('name', u.name)) as users
+      from companies c
+      left join users u on u.id = c.assigned_to
+      where ${conditions.join(" and ")}
+      order by c.created_at desc
+    `,
+    values
+  );
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ data: data ?? [] });
+  return NextResponse.json({ data });
 }
 
 export async function POST(request: NextRequest) {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -85,7 +105,9 @@ export async function POST(request: NextRequest) {
     | {
         name?: string;
         rfc?: string;
-        priority?: string;
+        product?: string;
+        contractStatus?: string;
+        contactSource?: string;
         nextActionAt?: string | null;
         phone?: string;
         email?: string;
@@ -114,21 +136,37 @@ export async function POST(request: NextRequest) {
   }
 
   const rfcNormalized = normalizeRfc(rfc);
-  const priority = (body?.priority ?? "medium") as CompanyPriority;
+  const product = (body?.product ?? "divisas") as CompanyProduct;
+  const contractStatus = (body?.contractStatus ?? "activo") as CompanyContractStatus;
+  const contactSource = (body?.contactSource ?? "otro") as CompanyContactSource;
 
-  if (!COMPANY_PRIORITIES.includes(priority)) {
-    return NextResponse.json({ error: "Invalid priority" }, { status: 400 });
+  if (!COMPANY_PRODUCTS.includes(product)) {
+    return NextResponse.json({ error: "Invalid product" }, { status: 400 });
+  }
+  if (!COMPANY_CONTRACT_STATUSES.includes(contractStatus)) {
+    return NextResponse.json({ error: "Invalid contract status" }, { status: 400 });
+  }
+  if (!COMPANY_CONTACT_SOURCES.includes(contactSource)) {
+    return NextResponse.json({ error: "Invalid contact source" }, { status: 400 });
   }
 
-  const { data: existing } = await supabase
-    .from("companies")
-    .select("id,created_at,status,users!companies_assigned_to_fkey(name)")
-    .eq("rfc_normalized", rfcNormalized)
-    .maybeSingle();
+  const existing = await queryOne<ExistingCompany>(
+    `
+      select
+        c.id,
+        c.created_at,
+        c.status,
+        u.name as assigned_agent_name
+      from companies c
+      left join users u on u.id = c.assigned_to
+      where c.rfc_normalized = $1
+      limit 1
+    `,
+    [rfcNormalized]
+  );
 
   if (existing) {
-    const found = existing as unknown as ExistingCompany;
-    await notifyUsers(supabase, [
+    await notifyUsers(undefined, [
       {
         userId: user.id,
         type: "duplicate_rfc",
@@ -141,9 +179,9 @@ export async function POST(request: NextRequest) {
       {
         error: "This company is already registered.",
         duplicate: {
-          assignedAgentName: getAssignedAgentName(found),
-          createdAt: found.created_at,
-          status: found.status,
+          assignedAgentName: getAssignedAgentName(existing),
+          createdAt: existing.created_at,
+          status: existing.status,
         },
       },
       { status: 409 }
@@ -153,11 +191,15 @@ export async function POST(request: NextRequest) {
   const assignedTo = user.id;
   const initialStatus: CompanyStatus = "prospect";
 
-  const { data: lock } = await supabase
-    .from("rfc_locks")
-    .select("locked_by,expires_at")
-    .eq("rfc_normalized", rfcNormalized)
-    .maybeSingle();
+  const lock = await queryOne<{ locked_by: string; expires_at: string }>(
+    `
+      select locked_by, expires_at
+      from rfc_locks
+      where rfc_normalized = $1
+      limit 1
+    `,
+    [rfcNormalized]
+  );
 
   if (
     lock &&
@@ -170,73 +212,117 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data, error } = await supabase
-    .from("companies")
-    .insert({
-      name,
-      rfc,
-      rfc_normalized: rfcNormalized,
-      phone: body?.phone?.trim() || null,
-      email: body?.email?.trim() || null,
-      notes: body?.notes?.trim() || null,
-      status: initialStatus,
-      priority,
-      next_action_at: body?.nextActionAt ?? null,
-      assigned_to: assignedTo,
-      office_id: profile.office_id,
-    })
-    .select("id")
-    .single();
+  try {
+    const data = await withTransaction(async (client) => {
+      const insertResult = await client.query<{ id: string }>(
+        `
+          insert into companies (
+            name,
+            rfc,
+            rfc_normalized,
+            phone,
+            email,
+            notes,
+            status,
+            product,
+            contract_status,
+            contact_source,
+            next_action_at,
+            assigned_to,
+            office_id
+          )
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          returning id
+        `,
+        [
+          name,
+          rfc,
+          rfcNormalized,
+          body?.phone?.trim() || null,
+          body?.email?.trim() || null,
+          body?.notes?.trim() || null,
+          initialStatus,
+          product,
+          contractStatus,
+          contactSource,
+          body?.nextActionAt ?? null,
+          assignedTo,
+          profile.office_id,
+        ]
+      );
 
-  if (error) {
-    if (error.code === "23505") {
-      const { data: duplicate } = await supabase
-        .from("companies")
-        .select("created_at,status,users!companies_assigned_to_fkey(name)")
-        .eq("rfc_normalized", rfcNormalized)
-        .maybeSingle();
+      await client.query(
+        `
+          delete from rfc_locks
+          where rfc_normalized = $1
+            and locked_by = $2
+        `,
+        [rfcNormalized, user.id]
+      );
+
+      return insertResult.rows[0];
+    });
+
+    const officeUsers = await query<{ id: string; role: string }>(
+      `
+        select id, role
+        from users
+        where office_id = $1
+      `,
+      [profile.office_id]
+    );
+
+    await notifyUsers(
+      undefined,
+      officeUsers
+        .filter((item) => item.id !== user.id && item.role === "admin")
+        .map((item) => ({
+          userId: item.id,
+          type: "company_created",
+          title: "Nueva empresa registrada",
+          message: `${name} fue registrada por ${profile.name}.`,
+          meta: { company_id: data.id, rfc: rfcNormalized },
+        }))
+    );
+
+    return NextResponse.json({ id: data.id }, { status: 201 });
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") {
+      const duplicate = await queryOne<ExistingCompany>(
+        `
+          select
+            c.id,
+            c.created_at,
+            c.status,
+            u.name as assigned_agent_name
+          from companies c
+          left join users u on u.id = c.assigned_to
+          where c.rfc_normalized = $1
+          limit 1
+        `,
+        [rfcNormalized]
+      );
 
       return NextResponse.json(
         {
           error: "This company is already registered.",
           duplicate: {
             assignedAgentName: getAssignedAgentName(
-              (duplicate as unknown as ExistingCompany | null) ?? null
+              duplicate
             ),
-            createdAt: (duplicate as ExistingCompany | null)?.created_at,
-            status: (duplicate as ExistingCompany | null)?.status,
+            createdAt: duplicate?.created_at,
+            status: duplicate?.status,
           },
         },
         { status: 409 }
       );
     }
 
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Could not create company",
+      },
+      { status: 500 }
+    );
   }
-
-  await supabase
-    .from("rfc_locks")
-    .delete()
-    .eq("rfc_normalized", rfcNormalized)
-    .eq("locked_by", user.id);
-
-  const { data: officeUsers } = await supabase
-    .from("users")
-    .select("id,role")
-    .eq("office_id", profile.office_id);
-
-  await notifyUsers(
-    supabase,
-    (officeUsers ?? [])
-      .filter((item) => item.id !== user.id && item.role === "admin")
-      .map((item) => ({
-        userId: item.id,
-        type: "company_created",
-        title: "Nueva empresa registrada",
-        message: `${name} fue registrada por ${profile.name}.`,
-        meta: { company_id: data.id, rfc: rfcNormalized },
-      }))
-  );
-
-  return NextResponse.json({ id: data.id }, { status: 201 });
 }

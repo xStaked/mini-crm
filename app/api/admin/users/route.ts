@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { query, withTransaction } from "@/lib/db";
+import { hashPassword } from "@/lib/password";
 
 function generatePassword() {
   return `${randomBytes(6).toString("hex")}A!9`;
 }
 
 export async function GET() {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -22,21 +23,21 @@ export async function GET() {
     return NextResponse.json({ error: "User inactive" }, { status: 403 });
   }
 
-  const { data, error } = await supabase
-    .from("users")
-    .select("id,name,email,role,is_active,office_id,created_at")
-    .eq("office_id", profile.office_id)
-    .order("created_at", { ascending: false });
+  const data = await query(
+    `
+      select id, name, email, role, is_active, office_id, created_at
+      from users
+      where office_id = $1
+      order by created_at desc
+    `,
+    [profile.office_id]
+  );
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ data: data ?? [] });
+  return NextResponse.json({ data });
 }
 
 export async function POST(request: NextRequest) {
-  const { supabase, user, profile } = await getAuthContext();
+  const { user, profile } = await getAuthContext();
 
   if (!user || !profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -62,47 +63,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Name and email are required" }, { status: 400 });
   }
 
-  let adminClient;
   try {
-    adminClient = createAdminClient();
+    const passwordHash = hashPassword(body?.password?.trim() || generatePassword());
+    const created = await withTransaction(async (client) => {
+      const result = await client.query<{
+        id: string;
+        email: string;
+        role: "admin" | "agent";
+      }>(
+        `
+          insert into users (name, email, role, office_id, is_active, password_hash)
+          values ($1, $2, $3, $4, true, $5)
+          returning id, email, role
+        `,
+        [name, email, role, profile.office_id, passwordHash]
+      );
+
+      return result.rows[0];
+    });
+
+    return NextResponse.json(created);
   } catch (error) {
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Service role not configured",
+        error: error instanceof Error ? error.message : "Could not create user",
       },
-      { status: 500 }
-    );
-  }
-
-  const { data: created, error: createError } = await adminClient.auth.admin.createUser({
-    email,
-    password: body?.password?.trim() || generatePassword(),
-    email_confirm: true,
-    user_metadata: {
-      name,
-      role,
-      office_id: profile.office_id,
-    },
-  });
-
-  if (createError || !created.user) {
-    return NextResponse.json(
-      { error: createError?.message ?? "Could not create user" },
       { status: 400 }
     );
   }
-
-  await supabase
-    .from("users")
-    .update({ name, role, office_id: profile.office_id, is_active: true })
-    .eq("id", created.user.id);
-
-  return NextResponse.json({
-    id: created.user.id,
-    email,
-    role,
-  });
 }
