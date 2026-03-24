@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { emitCompanyActivityUpdated } from "@/lib/company-activity-events";
 
 type Props = {
   companyId: string;
@@ -34,7 +35,10 @@ export function CompanyNextActionInput({ companyId, initialValue }: Props) {
           | { error?: string }
           | null;
         setError(payload?.error ?? "Could not update next action");
+        return;
       }
+
+      emitCompanyActivityUpdated(companyId);
     });
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { emitCompanyActivityUpdated } from "@/lib/company-activity-events";
 import { COMPANY_STATUSES, type CompanyStatus } from "@/lib/types";
 
 const statusLabels: Record<CompanyStatus, string> = {
@@ -36,7 +37,10 @@ export function CompanyStatusSelect({ companyId, initialStatus }: Props) {
           | { error?: string }
           | null;
         setError(payload?.error ?? "No se pudo actualizar el estado");
+        return;
       }
+
+      emitCompanyActivityUpdated(companyId);
     });
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { emitCompanyActivityUpdated } from "@/lib/company-activity-events";
 import { COMPANY_PRODUCTS, type CompanyProduct } from "@/lib/types";
 
 const productLabels: Record<CompanyProduct, string> = {
@@ -36,7 +37,10 @@ export function CompanyProductSelect({ companyId, initialProduct }: Props) {
           | { error?: string }
           | null;
         setError(payload?.error ?? "No se pudo actualizar el producto");
+        return;
       }
+
+      emitCompanyActivityUpdated(companyId);
     });
   };
 

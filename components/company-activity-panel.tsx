@@ -2,6 +2,7 @@
 "use client";
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { onCompanyActivityUpdated } from "@/lib/company-activity-events";
 import { ACTIVITY_TYPES, type ActivityType, type CompanyActivity } from "@/lib/types";
 
 type Props = {
@@ -37,6 +38,14 @@ export function CompanyActivityPanel({ companyId, companyName }: Props) {
   useEffect(() => {
     void loadActivities();
   }, [loadActivities]);
+
+  useEffect(() => {
+    return onCompanyActivityUpdated((updatedCompanyId) => {
+      if (updatedCompanyId === companyId) {
+        void loadActivities();
+      }
+    });
+  }, [companyId, loadActivities]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

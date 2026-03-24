@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { emitCompanyActivityUpdated } from "@/lib/company-activity-events";
 
 type Agent = {
   id: string;
@@ -39,7 +40,10 @@ export function ReassignCompanySelect({
           | { error?: string }
           | null;
         setError(payload?.error ?? "Could not reassign company");
+        return;
       }
+
+      emitCompanyActivityUpdated(companyId);
     });
   };
 

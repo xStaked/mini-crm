@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { emitCompanyActivityUpdated } from "@/lib/company-activity-events";
 import { COMPANY_CONTACT_SOURCES, type CompanyContactSource } from "@/lib/types";
 
 const sourceLabels: Record<CompanyContactSource, string> = {
@@ -40,7 +41,10 @@ export function CompanyContactSourceSelect({
           | { error?: string }
           | null;
         setError(payload?.error ?? "No se pudo actualizar el medio de contacto");
+        return;
       }
+
+      emitCompanyActivityUpdated(companyId);
     });
   };
 
